@@ -17,5 +17,6 @@
 - 查询参数使用 `page`、`pageSize`、`keyword`；不要新增 `pageIndex`。
 - 认证和权限必须挂在 router group middleware，不能只在 handler 中判断。
 - 每个新接口添加 Swagger `@Router`、权限声明和测试；确认 API 记录写入权限表。
+- 客户端埋点统一使用 `POST /api/v1/client/events`，禁止为单个页面新增专用埋点路径。
 
 跨工程完整约定见 `../API_ROUTE_RULES.md`。AI 修改路由前必须用 `rg` 同时核对 router、Swagger 和三个前端工程引用。

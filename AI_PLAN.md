@@ -95,6 +95,36 @@ GET /api/v1/client/live/rooms?page=1&pageSize=6
 
 接口需要客户端登录，按 `viewers DESC, sort ASC, id DESC` 分页返回 `gb_live_rooms` 中状态为 `live` 的房间；`gameId`、`serverId` 对外返回字符串 ID，未设置时返回 `null`。
 
+响应项包含 `id,title,streamerName,streamerAvatar,coverUrl,viewers,gameId,gameName,serverId,serverName,status,roomUrl,startedAt,endedAt,sort`；业务 ID 格式分别为 `live_{id}`、`game_{id}`、`server_{id}`。分页响应包含 `list,page,pageSize,total,hasMore`，成功消息为 `ok`。
+
+房间列表支持 `keyword,categoryId,gameId,status,sort,page,pageSize,viewers,startedAt,recommendation`；`viewers` 为最低观看人数，`startedAt` 为 RFC3339 起始时间，`sort` 支持 `popular/viewers`、`latest/newest`、`recommended`。
+
+详情接口：`GET /api/v1/client/live/rooms/{id}`，需要客户端登录；`id` 使用 `live_{id}`，返回公告、主播信息、播放流、清晰度、游戏、区服、观看人数和直播状态。未绑定主播/区服时对应对象返回 `null`。
+
+### C 端主播
+
+```text
+GET /api/v1/client/live/streamers/{id}
+GET /api/v1/client/live/streamers/{id}/rooms?page=1&pageSize=10
+GET /api/v1/client/live/streamers?sort=popular&page=1&pageSize=10
+```
+
+主播详情返回 `id,name,avatarUrl,coverUrl,description,fans,following,isLive,currentRoomId`；主播列表支持 `popular` 按粉丝数倒序，主播房间列表优先当前直播并分页。
+
+关注接口：`POST/DELETE /api/v1/client/live/streamers/{id}/follow`，以及 `GET /api/v1/client/users/me/live/following`；关注操作幂等并在事务内维护粉丝数。
+
+举报接口：`POST /api/v1/client/reports`，客户端登录后可提交 `live_room` 类型举报，返回 `reportId` 和 `submitted` 状态。
+
+直播埋点统一使用 `POST /api/v1/client/events`，支持 `live_exposure`、`live_click`、`live_enter`、`live_follow`，记录 `resourceType/resourceId/source/sessionId`。
+
+### C 端直播分类
+
+```text
+GET /api/v1/client/live/categories
+```
+
+无需登录，仅返回 `gb_live_categories.enabled = true` 的分类，按 `sort ASC, id ASC` 排序，响应 `data.list` 项包含 `id,name,type,sort,enabled`。
+
 ### `A.USER.01` 玩家用户查询与封禁
 
 玩家账号必须使用独立的 `users`/`gb_users` 表，禁止查询或修改 `sys_user` 代替玩家账号。手机号、身份证摘要和实名状态属于敏感字段，后台响应必须脱敏。

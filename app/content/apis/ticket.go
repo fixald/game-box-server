@@ -1,11 +1,58 @@
 package apis
 
 import (
+	"fmt"
 	"github.com/gin-gonic/gin"
+	jwt "github.com/go-admin-team/go-admin-core/sdk/pkg/jwtauth"
 	"go-admin/app/content/models"
 	"go-admin/common/apis"
 	"strconv"
 )
+
+// CreateReport submits a client report for a live room.
+// @Summary Submit client report
+// @Tags client-content
+// @Accept json
+// @Produce json
+// @Param request body reportInput true "Report request"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/v1/client/reports [post]
+func CreateReport(c *gin.Context) {
+	a, ok := base(c)
+	if !ok {
+		return
+	}
+	claims := jwt.ExtractClaims(c)
+	userID, err := strconv.ParseUint(fmt.Sprint(claims["sub"]), 10, 32)
+	if err != nil || userID == 0 {
+		a.Error(10001, err, "用户身份无效")
+		return
+	}
+	var in reportInput
+	if err := c.ShouldBindJSON(&in); err != nil || in.TargetType == "" || in.TargetID == "" || in.Reason == "" {
+		a.Error(90001, nil, "参数错误")
+		return
+	}
+	if in.TargetType != "live_room" || len(in.TargetID) > 64 || len(in.Reason) > 64 || len(in.Detail) > 2000 {
+		a.Error(90001, nil, "举报目标或内容无效")
+		return
+	}
+	row := models.Report{UserID: uintPtr(uint(userID)), TargetType: in.TargetType, TargetID: in.TargetID, Reason: in.Reason, Detail: in.Detail, Status: "submitted"}
+	if err := a.Orm.Create(&row).Error; err != nil {
+		a.Error(90002, err, "提交举报失败")
+		return
+	}
+	a.OK(gin.H{"reportId": fmt.Sprintf("report_%d", row.ID), "status": row.Status}, "ok")
+}
+
+type reportInput struct {
+	TargetType string `json:"targetType"`
+	TargetID   string `json:"targetId"`
+	Reason     string `json:"reason"`
+	Detail     string `json:"detail"`
+}
+
+func uintPtr(value uint) *uint { return &value }
 
 func base(c *gin.Context) (*apis.Api, bool) {
 	a := new(apis.Api).MakeContext(c).MakeOrm()

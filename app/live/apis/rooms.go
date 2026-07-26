@@ -3,11 +3,42 @@ package apis
 import (
 	"fmt"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go-admin/app/live/models"
 	commonapis "go-admin/common/apis"
 )
+
+// RoomItem is the public representation of a live room. Keep this separate
+// from the persistence model so database column names and internal IDs never
+// become part of the client contract.
+type RoomItem struct {
+	ID             string     `json:"id"`
+	Title          string     `json:"title"`
+	StreamerName   string     `json:"streamerName"`
+	StreamerAvatar string     `json:"streamerAvatar"`
+	CoverURL       string     `json:"coverUrl"`
+	Viewers        int        `json:"viewers"`
+	GameID         *string    `json:"gameId"`
+	GameName       string     `json:"gameName"`
+	ServerID       *string    `json:"serverId"`
+	ServerName     string     `json:"serverName"`
+	Status         string     `json:"status"`
+	RoomURL        string     `json:"roomUrl"`
+	StartedAt      time.Time  `json:"startedAt"`
+	EndedAt        *time.Time `json:"endedAt"`
+	Sort           int        `json:"sort"`
+}
+
+type RoomListResponse struct {
+	List     []RoomItem `json:"list"`
+	Page     int        `json:"page"`
+	PageSize int        `json:"pageSize"`
+	Total    int64      `json:"total"`
+	HasMore  bool       `json:"hasMore"`
+}
 
 func db(c *gin.Context) (*commonapis.Api, bool) {
 	a := new(commonapis.Api).MakeContext(c).MakeOrm()
@@ -39,42 +70,170 @@ func List(c *gin.Context) {
 		return
 	}
 
-	query := a.Orm.Model(&models.Room{}).Where("status = ?", "live")
+	query := a.Orm.Model(&models.Room{})
+	if status := strings.TrimSpace(c.Query("status")); status != "" {
+		query = query.Where("status = ?", status)
+	} else {
+		query = query.Where("status = ?", "live")
+	}
+	if keyword := strings.TrimSpace(c.Query("keyword")); keyword != "" {
+		like := "%" + keyword + "%"
+		query = query.Where("(title LIKE ? OR streamer_name LIKE ? OR game_name LIKE ? OR server_name LIKE ?)", like, like, like, like)
+	}
+	if categoryID := strings.TrimSpace(c.Query("categoryId")); categoryID != "" {
+		query = query.Where("category_id = ?", categoryID)
+	}
+	if gameID := strings.TrimPrefix(strings.TrimSpace(c.Query("gameId")), "game_"); gameID != "" {
+		id, err := strconv.ParseUint(gameID, 10, 32)
+		if err != nil {
+			a.Error(90001, err, "游戏 ID 无效")
+			return
+		}
+		query = query.Where("game_id = ?", uint(id))
+	}
+	if viewers := strings.TrimSpace(c.Query("viewers")); viewers != "" {
+		min, err := strconv.Atoi(viewers)
+		if err != nil || min < 0 {
+			a.Error(90001, nil, "观看人数无效")
+			return
+		}
+		query = query.Where("viewers >= ?", min)
+	}
+	if startedAt := strings.TrimSpace(c.Query("startedAt")); startedAt != "" {
+		started, err := time.Parse(time.RFC3339, startedAt)
+		if err != nil {
+			a.Error(90001, err, "开始时间无效")
+			return
+		}
+		query = query.Where("started_at >= ?", started.UTC())
+	}
+	if recommendation := strings.TrimSpace(c.Query("recommendation")); recommendation != "" {
+		value, err := strconv.ParseBool(recommendation)
+		if err != nil {
+			a.Error(90001, err, "推荐参数无效")
+			return
+		}
+		query = query.Where("recommendation = ?", value)
+	}
+	order := "viewers DESC, sort ASC, id DESC"
+	switch strings.ToLower(strings.TrimSpace(c.Query("sort"))) {
+	case "latest", "newest":
+		order = "started_at DESC, id DESC"
+	case "recommended":
+		order = "recommendation DESC, sort ASC, viewers DESC, id DESC"
+	case "viewers", "popular":
+		order = "viewers DESC, sort ASC, id DESC"
+	}
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
 		a.Error(90002, err, "查询失败")
 		return
 	}
 	var rows []models.Room
-	if err := query.Order("viewers DESC, sort ASC, id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&rows).Error; err != nil {
+	if err := query.Order(order).Offset((page - 1) * pageSize).Limit(pageSize).Find(&rows).Error; err != nil {
 		a.Error(90002, err, "查询失败")
 		return
 	}
 
-	list := make([]gin.H, 0, len(rows))
+	list := make([]RoomItem, 0, len(rows))
 	for _, row := range rows {
-		item := gin.H{
-			"id": fmt.Sprintf("live_%d", row.ID), "title": row.Title,
-			"streamerName": row.StreamerName, "streamerAvatar": row.StreamerAvatar,
-			"coverUrl": row.CoverURL, "viewers": row.Viewers,
-			"gameId": numericID(row.GameID), "gameName": row.GameName,
-			"serverId": numericID(row.ServerID), "serverName": row.ServerName,
-			"status": row.Status, "roomUrl": row.RoomURL,
-			"startedAt": row.StartedAt, "endedAt": row.EndedAt,
+		item := RoomItem{
+			ID: fmt.Sprintf("live_%d", row.ID), Title: row.Title,
+			StreamerName: row.StreamerName, StreamerAvatar: row.StreamerAvatar,
+			CoverURL: row.CoverURL, Viewers: row.Viewers,
+			GameID: prefixedID("game", row.GameID), GameName: row.GameName,
+			ServerID: prefixedID("server", row.ServerID), ServerName: row.ServerName,
+			Status: row.Status, RoomURL: row.RoomURL,
+			StartedAt: row.StartedAt, EndedAt: row.EndedAt, Sort: row.Sort,
 		}
 		list = append(list, item)
 	}
 
-	data := gin.H{
-		"requestId": c.GetHeader("X-Request-ID"), "list": list, "page": page,
-		"pageSize": pageSize, "total": total, "hasMore": int64(page*pageSize) < total,
+	data := RoomListResponse{
+		List: list, Page: page, PageSize: pageSize, Total: total,
+		HasMore: int64(page*pageSize) < total,
 	}
-	a.OK(data, "success")
+	a.OK(data, "ok")
 }
 
-func numericID(id *uint) interface{} {
+// Detail returns one live room and its playback metadata.
+// @Summary Get client live room
+// @Tags client-live
+// @Produce json
+// @Param id path string true "Live room ID, for example live_1001"
+// @Success 200 {object} map[string]interface{}
+// @Failure 404 {object} map[string]interface{}
+// @Router /api/v1/client/live/rooms/{id} [get]
+func Detail(c *gin.Context) {
+	a, ok := db(c)
+	if !ok {
+		return
+	}
+	id, err := parseLiveID(c.Param("id"))
+	if err != nil {
+		a.Error(90001, err, "直播间不存在")
+		return
+	}
+
+	var row models.Room
+	if err := a.Orm.First(&row, id).Error; err != nil {
+		a.Error(90001, err, "直播间不存在")
+		return
+	}
+
+	streamerID := row.StreamerID
+	if streamerID == "" {
+		streamerID = fmt.Sprintf("streamer_%d", row.ID)
+	}
+	protocol := row.StreamProtocol
+	if protocol == "" {
+		protocol = "hls"
+	}
+	serverStatus := row.ServerStatus
+	if serverStatus == "" {
+		serverStatus = "hot"
+	}
+	qualities := row.StreamQualities
+	if qualities == nil {
+		qualities = []models.StreamQuality{{Name: "高清", URL: row.RoomURL}}
+	}
+
+	a.OK(gin.H{
+		"id": rowID("live", row.ID), "title": row.Title, "announcement": row.Announcement,
+		"streamer": gin.H{"id": streamerID, "name": row.StreamerName, "avatarUrl": row.StreamerAvatar, "fans": row.StreamerFans, "isFollowed": false},
+		"stream":   gin.H{"playUrl": row.RoomURL, "protocol": protocol, "expiresAt": row.StreamExpiresAt, "qualities": qualities},
+		"game":     optionalEntity("game", row.GameID, row.GameName),
+		"server":   optionalEntityWithStatus("server", row.ServerID, row.ServerName, serverStatus),
+		"viewers":  row.Viewers, "status": row.Status, "startedAt": row.StartedAt,
+	}, "ok")
+}
+
+func parseLiveID(value string) (uint, error) {
+	id, err := strconv.ParseUint(strings.TrimPrefix(value, "live_"), 10, 32)
+	return uint(id), err
+}
+
+func rowID(prefix string, id uint) string { return fmt.Sprintf("%s_%d", prefix, id) }
+
+func optionalEntity(prefix string, id *uint, name string) interface{} {
 	if id == nil {
 		return nil
 	}
-	return strconv.FormatUint(uint64(*id), 10)
+	return gin.H{"id": rowID(prefix, *id), "name": name}
+}
+
+func optionalEntityWithStatus(prefix string, id *uint, name, status string) interface{} {
+	entity := optionalEntity(prefix, id, name)
+	if entity == nil {
+		return nil
+	}
+	return gin.H{"id": rowID(prefix, *id), "name": name, "status": status}
+}
+
+func prefixedID(prefix string, id *uint) *string {
+	if id == nil {
+		return nil
+	}
+	value := fmt.Sprintf("%s_%d", prefix, *id)
+	return &value
 }

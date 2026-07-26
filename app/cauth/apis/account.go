@@ -85,13 +85,21 @@ func clientUserProfile(db *gorm.DB, u *models.User) gin.H {
 // task is no longer unread, while in-progress tasks are not actionable yet.
 func taskUnreadCount(db *gorm.DB, userID uint) int64 {
 	var count int64
-	for _, d := range taskDefs {
-		if d.ID != "task-1" && d.ID != "task-3" {
+	var tasks []models.Task
+	db.Where("status = ?", "active").Find(&tasks)
+	for _, d := range tasks {
+		if d.Code != "task-1" && d.Code != "task-3" {
 			continue
 		}
 		var claimed int64
-		db.Model(&models.TaskClaim{}).Where("user_id = ? AND task_id = ?", userID, d.ID).Count(&claimed)
-		if claimed == 0 {
+		db.Model(&models.TaskClaim{}).Where("user_id = ? AND task_id = ?", userID, d.Code).Count(&claimed)
+		var logins int64
+		if d.Code == "task-1" {
+			db.Model(&models.LoginRecord{}).Where("user_id=? AND success=? AND login_at>=?", userID, true, time.Now().UTC().Truncate(24*time.Hour)).Count(&logins)
+		} else {
+			db.Model(&models.RecentGame{}).Where("user_id=? AND visited_at>=?", userID, time.Now().UTC().Truncate(24*time.Hour)).Count(&logins)
+		}
+		if claimed == 0 && logins > 0 {
 			count++
 		}
 	}

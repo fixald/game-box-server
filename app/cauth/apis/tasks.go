@@ -1,6 +1,7 @@
 package apis
 
 import (
+	"encoding/json"
 	"go-admin/app/cauth/models"
 	"net/http"
 	"time"
@@ -17,16 +18,6 @@ func taskWrite(c *gin.Context, code int, msg string, body gin.H) {
 	c.JSON(http.StatusOK, response)
 }
 
-type taskDef struct {
-	ID, Category, Title, Description, Icon string
-	Target, Points                         int
-	ActionLabel, ActionRoute               string
-}
-
-var taskDefs = []taskDef{
-	{"task-1", "daily", "每日登录盒子", "登录客户端即可完成", "◷", 1, 20, "", ""}, {"task-2", "daily", "观看直播 10 分钟", "在直播频道观看任意直播", "▶", 10, 50, "去直播", "#/live"}, {"task-3", "game", "启动一次游戏", "启动任意已安装的传奇游戏", "⚔", 1, 0, "", ""}, {"task-4", "newbie", "完善个人资料", "上传头像并设置昵称", "◇", 1, 0, "去完善", "#/settings"}, {"task-5", "social", "关注 3 位主播", "关注你喜欢的传奇主播", "♡", 3, 30, "去关注", "#/live"}, {"task-6", "newbie", "完成首次下载", "下载并校验一款游戏", "↓", 1, 0, "", ""}, {"task-7", "daily", "浏览新服推荐", "查看今日推荐新区和开服信息", "◈", 1, 10, "去新服", "#/"}, {"task-8", "daily", "完成一次签到", "在任务中心完成每日签到", "✓", 1, 20, "", ""}, {"task-9", "game", "查看游戏详情", "浏览任意一款游戏的详情页面", "◉", 1, 15, "去游戏", "#/games"}, {"task-10", "game", "进入推荐区服", "从新服推荐中选择一个区服", "⚑", 1, 0, "", ""}, {"task-11", "social", "查看一条资讯", "阅读平台最新游戏资讯", "▤", 1, 10, "去资讯", "#/news"}, {"task-12", "newbie", "完成首次区服选择", "选择喜欢的游戏区服", "◇", 1, 0, "", ""},
-}
-
 func taskUser(c *gin.Context) (*models.User, bool) {
 	a, ok := ormAPI(c)
 	if !ok {
@@ -35,9 +26,45 @@ func taskUser(c *gin.Context) (*models.User, bool) {
 	u, ok := accountUser(c, a)
 	return u, ok
 }
-func taskJSON(d taskDef, status string, progress int) gin.H {
-	rewards := []gin.H{{"type": "points", "name": "积分", "amount": d.Points, "icon": "✦"}}
-	return gin.H{"id": d.ID, "category": d.Category, "title": d.Title, "description": d.Description, "icon": d.Icon, "progress": progress, "target": d.Target, "status": status, "rewards": rewards, "actionLabel": d.ActionLabel, "actionRoute": d.ActionRoute}
+func taskPoints(d models.Task) int {
+	var rewards []struct {
+		Amount int `json:"amount"`
+	}
+	if json.Unmarshal([]byte(d.Rewards), &rewards) == nil && len(rewards) > 0 {
+		return rewards[0].Amount
+	}
+	return d.Points
+}
+func taskProgress(db *gorm.DB, u *models.User, d models.Task, now time.Time) int {
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	var n int64
+	switch d.Code {
+	case "task-1":
+		db.Model(&models.LoginRecord{}).Where("user_id=? AND success=? AND login_at>=?", u.ID, true, start).Count(&n)
+	case "task-3":
+		db.Model(&models.RecentGame{}).Where("user_id=? AND visited_at>=?", u.ID, start).Count(&n)
+	case "task-6":
+		db.Model(&models.DownloadRecord{}).Where("user_id=? AND status=?", u.ID, "completed").Count(&n)
+	case "task-8":
+		db.Model(&models.CheckinRecord{}).Where("user_id=? AND checkin_at=?", u.ID, start).Count(&n)
+	case "task-4":
+		if u.Nickname != "" && u.AvatarURL != "" {
+			n = 1
+		}
+	default:
+		return 0
+	}
+	if n > int64(d.Target) {
+		return d.Target
+	}
+	return int(n)
+}
+func taskJSON(d models.Task, status string, progress int) gin.H {
+	var rewards interface{}
+	if d.Rewards != "" {
+		_ = json.Unmarshal([]byte(d.Rewards), &rewards)
+	}
+	return gin.H{"id": d.Code, "category": d.Category, "title": d.Title, "description": d.Description, "icon": d.Icon, "progress": progress, "target": d.Target, "status": status, "rewards": rewards, "actionLabel": d.ActionLabel, "actionRoute": d.ActionRoute}
 }
 func Tasks(c *gin.Context) {
 	a, ok := ormAPI(c)
@@ -52,19 +79,20 @@ func Tasks(c *gin.Context) {
 	if category == "" {
 		category = "all"
 	}
-	list := make([]gin.H, 0)
+	var defs []models.Task
+	a.Orm.Where("status = ?", "active").Order("sort ASC, id ASC").Find(&defs)
+	list := make([]gin.H, 0, len(defs))
 	completed := 0
 	claimable := 0
-	for _, d := range taskDefs {
+	for _, d := range defs {
 		if category != "all" && d.Category != category {
 			continue
 		}
 		var claim models.TaskClaim
-		claimed := a.Orm.Where("user_id=? AND task_id=?", u.ID, d.ID).First(&claim).Error == nil
+		claimed := a.Orm.Where("user_id=? AND task_id=?", u.ID, d.Code).First(&claim).Error == nil
 		status := "in_progress"
-		progress := 0
-		if d.ID == "task-1" || d.ID == "task-3" {
-			progress = 1
+		progress := taskProgress(a.Orm, u, d, time.Now().UTC())
+		if progress >= d.Target {
 			status = "claimable"
 		}
 		if claimed {
@@ -101,13 +129,16 @@ func TaskList(c *gin.Context) {
 	if !ok {
 		return
 	}
-	list := make([]gin.H, 0, len(taskDefs))
-	for _, d := range taskDefs {
+	var defs []models.Task
+	a.Orm.Where("status = ?", "active").Order("sort ASC, id ASC").Find(&defs)
+	list := make([]gin.H, 0, len(defs))
+	for _, d := range defs {
 		var claim models.TaskClaim
-		claimed := a.Orm.Where("user_id=? AND task_id=?", u.ID, d.ID).First(&claim).Error == nil
+		claimed := a.Orm.Where("user_id=? AND task_id=?", u.ID, d.Code).First(&claim).Error == nil
 		status, progress := "in_progress", 0
-		if d.ID == "task-1" || d.ID == "task-3" {
-			status, progress = "claimable", 1
+		progress = taskProgress(a.Orm, u, d, time.Now().UTC())
+		if progress >= d.Target {
+			status = "claimable"
 		}
 		if claimed {
 			status, progress = "claimed", d.Target
@@ -137,16 +168,24 @@ func Checkin(c *gin.Context) {
 		taskWrite(c, 400, "日期无效", gin.H{"data": nil})
 		return
 	}
+	if in.Date != time.Now().UTC().Format("2006-01-02") {
+		taskWrite(c, 400, "只能签到当天", gin.H{"data": nil})
+		return
+	}
 	var rec models.CheckinRecord
 	if a.Orm.Where("user_id=? AND checkin_at=?", u.ID, t).First(&rec).Error == nil {
 		taskWrite(c, 400, "今日已经签到", gin.H{"data": nil})
 		return
 	}
-	if err := a.Orm.Transaction(func(tx *gorm.DB) error { return tx.Create(&models.CheckinRecord{UserID: u.ID, CheckinAt: t}).Error }); err != nil {
+	if err := a.Orm.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&models.CheckinRecord{UserID: u.ID, CheckinAt: t}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&models.User{}).Where("id = ?", u.ID).UpdateColumn("points", gorm.Expr("points + ?", 20)).Error
+	}); err != nil {
 		taskWrite(c, 90001, "签到失败", gin.H{"data": nil})
 		return
 	}
-	a.Orm.Model(u).UpdateColumn("points", gorm.Expr("points + ?", 20))
 	taskWrite(c, 200, "success", gin.H{"data": gin.H{"date": in.Date, "points": 20}})
 }
 func ClaimTask(c *gin.Context) {
@@ -165,13 +204,8 @@ func ClaimTask(c *gin.Context) {
 		taskWrite(c, 400, "任务无效", gin.H{"data": nil})
 		return
 	}
-	var d *taskDef
-	for i := range taskDefs {
-		if taskDefs[i].ID == in.TaskID {
-			d = &taskDefs[i]
-		}
-	}
-	if d == nil {
+	var d models.Task
+	if a.Orm.Where("code = ? AND status = ?", in.TaskID, "active").First(&d).Error != nil {
 		taskWrite(c, 400, "任务不存在", gin.H{"data": nil})
 		return
 	}
@@ -180,12 +214,22 @@ func ClaimTask(c *gin.Context) {
 		taskWrite(c, 400, "任务奖励已领取", gin.H{"data": nil})
 		return
 	}
-	if d.Points == 0 {
-		d.Points = 20
+	points := taskPoints(d)
+	if taskProgress(a.Orm, u, d, time.Now().UTC()) < d.Target {
+		taskWrite(c, 400, "任务尚未完成", gin.H{"data": nil})
+		return
 	}
-	a.Orm.Create(&models.TaskClaim{UserID: u.ID, TaskID: in.TaskID, Points: d.Points, ClaimedAt: time.Now().UTC()})
-	a.Orm.Model(u).UpdateColumn("points", gorm.Expr("points + ?", d.Points))
-	taskWrite(c, 200, "success", gin.H{"data": gin.H{"taskId": in.TaskID, "points": d.Points}})
+	err := a.Orm.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&models.TaskClaim{UserID: u.ID, TaskID: in.TaskID, Points: points, ClaimedAt: time.Now().UTC()}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&models.User{}).Where("id = ?", u.ID).UpdateColumn("points", gorm.Expr("points + ?", points)).Error
+	})
+	if err != nil {
+		taskWrite(c, 90001, "领取失败", gin.H{"data": nil})
+		return
+	}
+	taskWrite(c, 200, "success", gin.H{"data": gin.H{"taskId": in.TaskID, "points": points}})
 }
 func CheckinRewards(c *gin.Context) {
 	a, ok := ormAPI(c)
