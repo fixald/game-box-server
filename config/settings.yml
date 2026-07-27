@@ -48,6 +48,17 @@ settings:
   extend: # 扩展项使用说明
     demo:
       name: data
+    # 阿里云直播配置
+    alilive:
+      accessKeyId: ''
+      accessKeySecret: ''
+      region: ''
+      pushDomain : ''
+      pullDomain: ''
+      appName: ''
+      pushAuthKey: ''
+      pullAuthKey: ''
+ 
   cache:
 #    redis:
 #      addr: 127.0.0.1:6379

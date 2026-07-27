@@ -5,6 +5,7 @@ import "time"
 // Room is a live room published to the client live catalogue.
 type Room struct {
 	ID              uint            `gorm:"primaryKey" json:"id"`
+	UserID          uint            `gorm:"index" json:"userid"`
 	Title           string          `gorm:"size:255;not null" json:"title"`
 	Announcement    string          `gorm:"size:512" json:"announcement"`
 	StreamerID      string          `gorm:"size:64" json:"streamerId"`
@@ -30,6 +31,8 @@ type Room struct {
 	Sort            int             `gorm:"not null;default:0" json:"sort"`
 	CreatedAt       time.Time       `json:"createdAt"`
 	UpdatedAt       time.Time       `json:"updatedAt"`
+	PushURL         string          `gorm:"size:512;not null" json:"pushUrl"`
+	StreamName      string          `gorm:"size:512" json:"streamName"`
 }
 
 type StreamQuality struct {
