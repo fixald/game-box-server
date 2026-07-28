@@ -125,6 +125,8 @@ GET /api/v1/client/live/categories
 
 无需登录，仅返回 `gb_live_categories.enabled = true` 的分类，按 `sort ASC, id ASC` 排序，响应 `data.list` 项包含 `id,name,type,sort,enabled`。
 
+分类不维护独立运营表，接口直接从 `gb_live_rooms` 的在线房间按 `categoryId/categoryName/categoryType` 去重聚合。
+
 ### `A.USER.01` 玩家用户查询与封禁
 
 玩家账号必须使用独立的 `users`/`gb_users` 表，禁止查询或修改 `sys_user` 代替玩家账号。手机号、身份证摘要和实名状态属于敏感字段，后台响应必须脱敏。

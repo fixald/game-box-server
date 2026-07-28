@@ -13,6 +13,8 @@ type Room struct {
 	StreamerFans    int             `gorm:"not null;default:0" json:"streamerFans"`
 	CoverURL        string          `gorm:"size:512" json:"coverUrl"`
 	CategoryID      string          `gorm:"size:64;index" json:"categoryId"`
+	CategoryName    string          `gorm:"size:64" json:"categoryName"`
+	CategoryType    string          `gorm:"size:32" json:"categoryType"`
 	Recommendation  bool            `gorm:"not null;default:false;index" json:"recommendation"`
 	Viewers         int             `gorm:"not null;default:0" json:"viewers"`
 	GameID          *uint           `gorm:"index" json:"gameId"`
