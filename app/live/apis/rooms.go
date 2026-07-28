@@ -6,9 +6,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"go-admin/app/live/models"
+	"go-admin/common/alilive"
 	commonapis "go-admin/common/apis"
+
+	"github.com/gin-gonic/gin"
+	"github.com/go-admin-team/go-admin-core/sdk/pkg/jwtauth"
+	"github.com/google/uuid"
 )
 
 // RoomItem is the public representation of a live room. Keep this separate
@@ -38,6 +42,17 @@ type RoomListResponse struct {
 	PageSize int        `json:"pageSize"`
 	Total    int64      `json:"total"`
 	HasMore  bool       `json:"hasMore"`
+}
+
+type createRoomRequest struct {
+	Title          string `json:"title" binding:"required"`
+	StreamerName   string `json:"streamerName" binding:"required"`
+	StreamerAvatar string `json:"streamerAvatar"`
+	CoverURL       string `json:"coverUrl"`
+	GameID         *uint  `json:"gameId"`
+	GameName       string `json:"gameName"`
+	ServerID       *uint  `json:"serverId"`
+	ServerName     string `json:"serverName"`
 }
 
 func db(c *gin.Context) (*commonapis.Api, bool) {
@@ -215,11 +230,180 @@ func parseLiveID(value string) (uint, error) {
 
 func rowID(prefix string, id uint) string { return fmt.Sprintf("%s_%d", prefix, id) }
 
+// Create creates a new live room with push URL.
+// @Summary Create a new live room
+// @Tags client-live
+// @Produce json
+// @Param Authorization header string true "Bearer token"
+// @Param body body createRoomRequest true "Room information"
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} map[string]interface{}
+// @Failure 90001 {object} map[string]interface{}
+// @Router /api/v1/client/live/room [post]
+func Create(c *gin.Context) {
+	a, ok := db(c)
+	if !ok {
+		return
+	}
+	var req createRoomRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		a.Error(90001, err, "请求参数错误")
+		return
+	}
+
+	userID := getUserID(c)
+	if userID == 0 {
+		a.Error(401, nil, "未登录")
+		return
+	}
+
+	streamName := fmt.Sprintf("stream_%d_%s", userID, uuid.New().String()[:8])
+
+	pushURL, err := alilive.GeneratePushURL(streamName)
+	if err != nil {
+		a.Error(90002, err, "生成推流URL失败")
+		return
+	}
+
+	playURL := alilive.GenerateHLSURL(streamName)
+
+	room := models.Room{
+		UserID:         userID,
+		Title:          req.Title,
+		StreamerName:   req.StreamerName,
+		StreamerAvatar: req.StreamerAvatar,
+		CoverURL:       req.CoverURL,
+		GameID:         req.GameID,
+		GameName:       req.GameName,
+		ServerID:       req.ServerID,
+		ServerName:     req.ServerName,
+		Status:         "live",
+		RoomURL:        playURL,
+		PushURL:        pushURL,
+		StreamName:     streamName,
+		StartedAt:      time.Now().UTC(),
+	}
+
+	if err := a.Orm.Create(&room).Error; err != nil {
+		a.Error(90002, err, "创建房间失败")
+		return
+	}
+
+	data := gin.H{
+		"room": gin.H{
+			"id":             fmt.Sprintf("live_%d", room.ID),
+			"title":          room.Title,
+			"streamerName":   room.StreamerName,
+			"streamerAvatar": room.StreamerAvatar,
+			"coverUrl":       room.CoverURL,
+			"pushUrl":        room.PushURL,
+			"roomUrl":        room.RoomURL,
+			"gameId":         numericID(room.GameID),
+			"gameName":       room.GameName,
+			"serverId":       numericID(room.ServerID),
+			"serverName":     room.ServerName,
+			"status":         room.Status,
+			"startedAt":      room.StartedAt,
+		},
+	}
+	a.OK(data, "创建成功")
+}
+
+// GetMyRoom returns the user's current live room.
+// @Summary Get user's current live room
+// @Tags client-live
+// @Produce json
+// @Param Authorization header string true "Bearer token"
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} map[string]interface{}
+// @Router /api/v1/client/live/room [get]
+func GetMyRoom(c *gin.Context) {
+	a, ok := db(c)
+	if !ok {
+		return
+	}
+
+	userID := getUserID(c)
+	if userID == 0 {
+		a.Error(401, nil, "未登录")
+		return
+	}
+
+	var room models.Room
+	err := a.Orm.Where("user_id = ? AND status = ?", userID, "live").First(&room).Error
+	if err != nil {
+		a.Error(90002, err, "未找到房间")
+		return
+	}
+
+	data := gin.H{
+		"room": gin.H{
+			"id":             fmt.Sprintf("live_%d", room.ID),
+			"title":          room.Title,
+			"streamerName":   room.StreamerName,
+			"streamerAvatar": room.StreamerAvatar,
+			"coverUrl":       room.CoverURL,
+			"pushUrl":        room.PushURL,
+			"roomUrl":        room.RoomURL,
+			"viewers":        room.Viewers,
+			"gameId":         numericID(room.GameID),
+			"gameName":       room.GameName,
+			"serverId":       numericID(room.ServerID),
+			"serverName":     room.ServerName,
+			"status":         room.Status,
+			"startedAt":      room.StartedAt,
+		},
+	}
+	a.OK(data, "success")
+}
+
+// EndRoom ends the live room.
+// @Summary End the live room
+// @Tags client-live
+// @Produce json
+// @Param Authorization header string true "Bearer token"
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} map[string]interface{}
+// @Router /api/v1/client/live/room [delete]
+func EndRoom(c *gin.Context) {
+	a, ok := db(c)
+	if !ok {
+		return
+	}
+
+	userID := getUserID(c)
+	if userID == 0 {
+		a.Error(401, nil, "未登录")
+		return
+	}
+
+	now := time.Now().UTC()
+	err := a.Orm.Model(&models.Room{}).
+		Where("user_id = ? AND status = ?", userID, "live").
+		Updates(map[string]interface{}{
+			"status":   "ended",
+			"ended_at": now,
+		}).Error
+	if err != nil {
+		a.Error(90002, err, "结束房间失败")
+		return
+	}
+
+	a.OK(nil, "结束成功")
+}
+
 func optionalEntity(prefix string, id *uint, name string) interface{} {
+
 	if id == nil {
 		return nil
 	}
 	return gin.H{"id": rowID(prefix, *id), "name": name}
+}
+func numericID(id *uint) interface{} {
+	if id == nil {
+		return nil
+	}
+	return gin.H{"id": *id}
 }
 
 func optionalEntityWithStatus(prefix string, id *uint, name, status string) interface{} {
@@ -236,4 +420,25 @@ func prefixedID(prefix string, id *uint) *string {
 	}
 	value := fmt.Sprintf("%s_%d", prefix, *id)
 	return &value
+}
+
+func getUserID(c *gin.Context) uint {
+	data, exists := c.Get(jwtauth.JwtPayloadKey)
+	if !exists {
+		return 0
+	}
+
+	claims, ok := data.(jwtauth.MapClaims)
+	if !ok {
+		return 0
+	}
+	sub, ok := claims["sub"].(string)
+	if !ok {
+		return 0
+	}
+	id, err := strconv.ParseUint(sub, 10, 32)
+	if err != nil {
+		return 0
+	}
+	return uint(id)
 }

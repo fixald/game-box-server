@@ -1,8 +1,6 @@
 package router
 
 import (
-	"github.com/gin-gonic/gin"
-	jwt "github.com/go-admin-team/go-admin-core/sdk/pkg/jwtauth"
 	bannerapis "go-admin/app/banners/apis"
 	cauth "go-admin/app/cauth/apis"
 	contentapis "go-admin/app/content/apis"
@@ -10,6 +8,9 @@ import (
 	liveapis "go-admin/app/live/apis"
 	searchapis "go-admin/app/search/apis"
 	serverapis "go-admin/app/servers/apis"
+
+	"github.com/gin-gonic/gin"
+	jwt "github.com/go-admin-team/go-admin-core/sdk/pkg/jwtauth"
 )
 
 func registerAuth(r *gin.RouterGroup) {
@@ -41,8 +42,6 @@ func registerAccountRouter(r *gin.RouterGroup, auth *jwt.GinJWTMiddleware) {
 		g := r.Group("").Use(auth.MiddlewareFunc())
 		g.GET("/users/me", cauth.Account)
 		g.POST("/reports", contentapis.CreateReport)
-		g.GET("/live/rooms", liveapis.List)
-		g.GET("/live/rooms/:id", liveapis.Detail)
 		g.GET("/live/streamers/:id/rooms", liveapis.StreamerRooms)
 		g.GET("/live/streamers/:id", liveapis.StreamerDetail)
 		g.POST("/live/streamers/:id/follow", liveapis.FollowStreamer)
@@ -115,6 +114,7 @@ func noCheckRoleRouter(r *gin.Engine) {
 	client.GET("/games/:id", func(c *gin.Context) { c.Set("publishedOnly", true); gameapis.Detail(c) })
 	client.GET("/game-servers", serverapis.RecommendedList)
 	client.GET("/live/categories", liveapis.Categories)
+	client.GET("/live/rooms/:id", liveapis.Detail)
 	client.GET("/search", searchapis.Search)
 	client.GET("/search/suggestions", searchapis.Suggestions)
 	client.GET("/search/hot", searchapis.Hot)

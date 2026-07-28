@@ -21,6 +21,8 @@ import (
 	"go-admin/app/admin/models"
 	"go-admin/app/admin/router"
 	"go-admin/app/jobs"
+	liveRouter "go-admin/app/live/router"
+	"go-admin/common/alilive"
 	"go-admin/common/database"
 	"go-admin/common/global"
 	common "go-admin/common/middleware"
@@ -65,6 +67,14 @@ func setup() {
 		database.Setup,
 		storage.Setup,
 	)
+
+	// 初始化阿里云直播客户端
+	if err := alilive.InitClient(); err != nil {
+		log.Warnf("阿里云直播客户端初始化失败: %v", err)
+	} else {
+		log.Info("阿里云直播客户端初始化成功")
+	}
+
 	//注册监听函数
 	queue := sdk.Runtime.GetMemoryQueue("")
 	queue.Register(global.LoginLog, models.SaveLoginLog)
@@ -87,8 +97,8 @@ func run() error {
 	}
 
 	srv := &http.Server{
-		Addr:    fmt.Sprintf("%s:%d", config.ApplicationConfig.Host, config.ApplicationConfig.Port),
-		Handler: sdk.Runtime.GetEngine(),
+		Addr:         fmt.Sprintf("%s:%d", config.ApplicationConfig.Host, config.ApplicationConfig.Port),
+		Handler:      sdk.Runtime.GetEngine(),
 		ReadTimeout:  time.Duration(config.ApplicationConfig.ReadTimeout) * time.Second,
 		WriteTimeout: time.Duration(config.ApplicationConfig.WriterTimeout) * time.Second,
 	}
@@ -185,4 +195,7 @@ func initRouter() {
 
 	common.InitMiddleware(r)
 
+	// 注册直播路由
+	authMiddleware, _ := common.AuthInit()
+	liveRouter.RegisterLiveRouter(r, authMiddleware)
 }

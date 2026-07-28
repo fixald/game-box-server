@@ -26,3 +26,6 @@ CLAUDE.md
 .claude/
 config/settings.local.dev.yml
 box-server
+
+# 临时文件
+temp/*
